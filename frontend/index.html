@@ -1,0 +1,4 @@
+<!doctype html><html><body><h1>Polymarket Liquidity Rewards Scanner</h1><label>Capital <input id='cap' value='500'/></label><table id='t'></table><script>
+async function load(){const cap=document.getElementById('cap').value;const r=await fetch('/markets?capital='+cap);const d=await r.json();document.getElementById('t').innerHTML='<tr><th>Market</th><th>Pool/day</th><th>Projected APR (estimate)</th><th>Projected $/day (estimate)</th></tr>'+d.map(m=>`<tr><td>${m.name}</td><td>${m.rewardPoolPerDay}</td><td>${(m.projection.projectedApr*100).toFixed(2)}%</td><td>$${m.projection.projectedDailyReward.toFixed(2)}</td></tr>`).join('')}
+cap.oninput=load;load();
+</script></body></html>
