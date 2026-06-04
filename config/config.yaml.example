@@ -1,0 +1,95 @@
+api:
+  gamma_base_url: "https://gamma-api.polymarket.com"
+  clob_base_url: "https://clob.polymarket.com"
+  chain_id: 137
+  request_timeout_seconds: 10
+  max_retries: 4
+
+strategy:
+  # paper logs what the bot would do; live sends orders via py-clob-client-v2.
+  mode: "paper"
+  loop_interval_seconds: 60
+  target_spread_cents: 1.0
+  min_estimated_daily_yield_pct: 6.5
+  max_order_size_usdc: 8
+  auto_discover: true
+  markets: []
+  boundary_buffer_cents: 1.0
+  cancel_stale_orders: true
+
+capital:
+  # $20 small-bankroll mode: concentrate only in the best market and keep a reserve.
+  starting_bankroll_usdc: 20
+  reserve_usdc: 3
+  max_active_capital_pct: 70
+  max_concurrent_markets: 1
+  small_bankroll_mode: true
+
+rewards:
+  # $1 payout rule buffer: only quote when expected daily rewards are comfortably above $1.
+  min_projected_payout_usdc: 1.30
+  min_expected_daily_yield_pct: 6.5
+  payout_safety_buffer: 1.30
+  sample_minutes_per_day: 1440
+
+optimization:
+  enabled: true
+  candidate_spreads_cents: [0.5, 1.0, 1.5]
+  quote_refresh_seconds: 15
+  max_q_imbalance_ratio: 1.5
+  auto_trade_top_market: true
+  backtest_enabled: false
+
+filters:
+  min_midpoint: 0.10
+  max_midpoint: 0.90
+  preferred_min_midpoint: 0.25
+  preferred_max_midpoint: 0.75
+  hard_stop_min_midpoint: 0.15
+  hard_stop_max_midpoint: 0.85
+  # Article-preferred safety rule for phase 1: avoid markets resolving soon.
+  min_days_to_resolution: 14
+  min_daily_rewards_usdc: 10
+  min_liquidity_usdc: 250
+  min_volume_24h_usdc: 250
+  min_hours_to_resolution: 336
+  max_hours_to_resolution: 1440
+  allowed_topics: []
+  blocked_keywords: ["lawsuit", "court", "delist", "bankruptcy"]
+  avoid_keywords: ["tweet", "mention", "say", "war", "invasion", "attack", "ceasefire", "lawsuit", "court", "bankruptcy", "celebrity"]
+  allow_sports: false
+
+policy:
+  # Never leave resting orders overnight. Times are UTC.
+  never_leave_orders_overnight: true
+  overnight_cancel_after_utc: "23:30"
+  resume_trading_after_utc: "00:10"
+  # Never hold positions: supervisor polls positions and sends sell orders immediately.
+  flatten_positions_immediately: true
+  position_poll_interval_seconds: 15
+  order_refresh_seconds: 60
+  # Low-competition market definition for $20 small-bankroll mode.
+  low_competition_max_q_min: 1000
+  low_competition_max_qualifying_levels_per_side: 3
+  marketable_exit_edge_cents: 1.0
+
+learning:
+  enabled: true
+  path: "data/learning_events.jsonl"
+
+pnl:
+  path: "data/pnl_events.jsonl"
+  reward_reconciliation_minutes_after_midnight: 5
+
+risk:
+  max_total_capital_usdc: 20
+  max_market_capital_usdc: 14
+  max_inventory_delta_usdc: 8
+  max_live_orders_per_market: 2
+  circuit_breaker_consecutive_errors: 5
+  pause_on_boundary_cross: true
+
+telegram:
+  enabled: false
+  chat_id: null
+  command_poll_seconds: 1.0
