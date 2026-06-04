@@ -10,8 +10,50 @@ import os
 from pathlib import Path
 from typing import Literal
 
-import yaml
-from pydantic import BaseModel, Field, SecretStr, field_validator
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - tests may run without optional deps installed
+    yaml = None
+try:
+    from pydantic import BaseModel, Field, SecretStr, field_validator
+except ModuleNotFoundError:  # pragma: no cover - lightweight fallback for dependency-free formula tests
+    from dataclasses import dataclass
+    from typing import Any
+
+    def Field(default: Any = None, default_factory: Any = None):
+        return default_factory() if default_factory is not None else default
+
+    class SecretStr:
+        def __init__(self, value: str):
+            self._value = value
+
+        def get_secret_value(self) -> str:
+            return self._value
+
+    def field_validator(*args: Any, **kwargs: Any):
+        def decorator(fn: Any) -> Any:
+            return fn
+        return decorator
+
+    class BaseModel:
+        def __init__(self, **kwargs: Any):
+            for cls in reversed(self.__class__.mro()):
+                for name in getattr(cls, "__annotations__", {}):
+                    if name in kwargs:
+                        value = kwargs[name]
+                    else:
+                        value = getattr(self.__class__, name, None)
+                    setattr(self, name, value)
+
+        @classmethod
+        def model_validate(cls, raw: dict[str, Any]):
+            return cls(**raw)
+
+        def model_copy(self, update: dict[str, Any] | None = None):
+            data = {name: getattr(self, name) for name in getattr(self.__class__, "__annotations__", {})}
+            if update:
+                data.update(update)
+            return self.__class__(**data)
 
 
 class ApiConfig(BaseModel):
@@ -25,6 +67,7 @@ class ApiConfig(BaseModel):
 class MarketFilters(BaseModel):
     min_midpoint: float = 0.10
     max_midpoint: float = 0.90
+    min_days_to_resolution: float = 7.0
     min_daily_rewards_usdc: float = 10.0
     min_liquidity_usdc: float = 1_000.0
     min_volume_24h_usdc: float = 1_000.0
@@ -56,10 +99,30 @@ class RiskConfig(BaseModel):
     pause_on_boundary_cross: bool = True
 
 
+class TradingPolicyConfig(BaseModel):
+    """Hard safety rules requested for the Telegram-controlled scalping workflow."""
+
+    never_leave_orders_overnight: bool = True
+    overnight_cancel_after_utc: str = "23:30"
+    resume_trading_after_utc: str = "00:10"
+    flatten_positions_immediately: bool = True
+    position_poll_interval_seconds: int = 15
+    order_refresh_seconds: int = 60
+    low_competition_max_q_min: float = 2_500.0
+    low_competition_max_qualifying_levels_per_side: int = 4
+    marketable_exit_edge_cents: float = 1.0
+
+
+class LearningConfig(BaseModel):
+    enabled: bool = True
+    path: str = "data/learning_events.jsonl"
+
+
 class TelegramConfig(BaseModel):
     enabled: bool = False
     chat_id: str | None = None
     token: SecretStr | None = None
+    command_poll_seconds: float = 1.0
 
 
 class Secrets(BaseModel):
@@ -74,6 +137,8 @@ class BotConfig(BaseModel):
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    policy: TradingPolicyConfig = Field(default_factory=TradingPolicyConfig)
+    learning: LearningConfig = Field(default_factory=LearningConfig)
     secrets: Secrets = Field(default_factory=Secrets)
 
     @field_validator("strategy")
@@ -84,7 +149,12 @@ class BotConfig(BaseModel):
 
 
 def load_config(path: str | Path) -> BotConfig:
-    raw = yaml.safe_load(Path(path).read_text()) if Path(path).exists() else {}
+    if Path(path).exists():
+        if yaml is None:
+            raise RuntimeError("PyYAML is required to load YAML config; install project dependencies")
+        raw = yaml.safe_load(Path(path).read_text())
+    else:
+        raw = {}
     cfg = BotConfig.model_validate(raw or {})
 
     cfg.telegram.token = SecretStr(os.environ["TELEGRAM_BOT_TOKEN"]) if os.getenv("TELEGRAM_BOT_TOKEN") else cfg.telegram.token

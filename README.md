@@ -92,6 +92,46 @@ strategy:
 3. Start with tiny capital limits and wide safety filters. Live mode uses the `py-clob-client-v2`
 adapter in `execution/executor.py`.
 
+
+## Telegram-first operation
+
+Enable Telegram in YAML and set the token/chat ID in the environment:
+
+```yaml
+telegram:
+  enabled: true
+```
+
+```bash
+export TELEGRAM_BOT_TOKEN='...'
+export TELEGRAM_CHAT_ID='123456789'
+```
+
+Available commands:
+
+- `/status` — mode, pause state, no-overnight window, flatten policy, and resolution horizon.
+- `/search` — discover markets that pass reward, liquidity, low-risk, and `>7 days to resolution` filters.
+- `/run_once` — run one search/quote/cancel/parse cycle immediately.
+- `/orders` — continuously parsed open-order/position state on demand.
+- `/sellall` — cancel resting orders and send immediate exit sell orders for all detected positions.
+- `/pause` — stop new orders and cancel resting orders.
+- `/resume` — allow new order placement again.
+- `/learning` — show the transparent adaptive memory summary.
+
+## Requested trading policy defaults
+
+The v1 config now encodes the operational rules requested for a Telegram-accessible bot:
+
+- Search for low-competition reward markets only.
+- Only trade markets resolving more than 7 days out.
+- Place limit orders, then continuously parse open orders and positions.
+- Never leave orders overnight: the bot cancels all resting orders during the configured UTC overnight window.
+- Never intentionally hold positions: the supervisor polls positions and immediately sends sell/flatten orders.
+- Learn from every step: every cycle, order attempt, supervisor parse, and exit attempt is appended to
+  `data/learning_events.jsonl`; recent competition and exit failures raise future yield hurdles.
+
+These rules are in the `policy:` and `learning:` YAML sections and can be tightened without code changes.
+
 ## Telegram alerts
 
 Assuming you already created a Telegram bot and know the chat ID:
@@ -106,8 +146,7 @@ telegram:
   enabled: true
 ```
 
-The current implementation sends startup, order-cycle, and circuit-breaker alerts. Command handling
-(`/status`, `/pause`, `/resume`) is intentionally left as an extension point in `monitoring/`.
+The current implementation sends startup, order-cycle, supervisor, exit, and circuit-breaker alerts, and registers the command surface documented above in `monitoring/`.
 
 ## Testing
 

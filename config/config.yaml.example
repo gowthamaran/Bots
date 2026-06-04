@@ -20,14 +20,34 @@ strategy:
 filters:
   min_midpoint: 0.10
   max_midpoint: 0.90
+  # User-requested safety rule: only markets resolving more than 7 days out.
+  min_days_to_resolution: 7
   min_daily_rewards_usdc: 10
   min_liquidity_usdc: 1000
   min_volume_24h_usdc: 1000
-  min_hours_to_resolution: 24
+  min_hours_to_resolution: 168
   max_hours_to_resolution: 1440
   allowed_topics: []
   blocked_keywords: ["lawsuit", "court", "delist", "bankruptcy"]
   allow_sports: false
+
+policy:
+  # Never leave resting orders overnight. Times are UTC.
+  never_leave_orders_overnight: true
+  overnight_cancel_after_utc: "23:30"
+  resume_trading_after_utc: "00:10"
+  # Never hold positions: supervisor polls positions and sends sell orders immediately.
+  flatten_positions_immediately: true
+  position_poll_interval_seconds: 15
+  order_refresh_seconds: 60
+  # Low-competition market definition for v1.
+  low_competition_max_q_min: 2500
+  low_competition_max_qualifying_levels_per_side: 4
+  marketable_exit_edge_cents: 1.0
+
+learning:
+  enabled: true
+  path: "data/learning_events.jsonl"
 
 risk:
   max_total_capital_usdc: 1000
@@ -40,3 +60,4 @@ risk:
 telegram:
   enabled: false
   chat_id: null
+  command_poll_seconds: 1.0

@@ -190,8 +190,13 @@ class PolymarketDataFetcher:
             return False
         if market.end_date:
             hours = (market.end_date - datetime.now(timezone.utc)).total_seconds() / 3600
+            days = hours / 24
+            if days < filters.min_days_to_resolution:
+                return False
             if hours < filters.min_hours_to_resolution or hours > filters.max_hours_to_resolution:
                 return False
+        else:
+            return False
         q = market.question.lower()
         if any(keyword.lower() in q for keyword in filters.blocked_keywords):
             return False
