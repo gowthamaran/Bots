@@ -1,0 +1,10 @@
+services:
+  polymarket-lp-bot:
+    build: .
+    env_file:
+      - .env
+    volumes:
+      - ./config/config.yaml:/app/config/config.yaml:ro
+      - ./data:/app/data
+    restart: unless-stopped
+    command: ["polymarket-lp-bot", "--config", "config/config.yaml"]
