@@ -101,7 +101,11 @@ class TelegramNotifier:
     async def _guard(self, update: Any, action: Callable[[], Awaitable[str]]) -> None:
         if not self._authorized(update):
             return
-        text = await action()
+        try:
+            text = await action()
+        except Exception as exc:  # noqa: BLE001 - Telegram must always answer instead of failing silently
+            logger.exception("telegram command failed")
+            text = f"⚠️ Command failed: <code>{str(exc)[:800]}</code>"
         await update.message.reply_text(text, parse_mode="HTML")
 
     async def _cmd_start(self, update: Any, context: Any) -> None:

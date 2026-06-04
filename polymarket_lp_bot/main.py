@@ -49,6 +49,7 @@ class LpBot:
         self.breaker = CircuitBreaker(self.cfg.risk.circuit_breaker_consecutive_errors)
         self._stop = asyncio.Event()
         self.paused = False
+        self.last_cycle_summary = "No cycle has run yet."
         self._supervisor_task: asyncio.Task | None = None
 
     async def start(self) -> None:
@@ -87,10 +88,18 @@ class LpBot:
         if not self.risk.trading_window_open():
             await self.executor.cancel_stale_orders(None)
             await self.flatten_positions("overnight_window")
+            self.last_cycle_summary = "Skipped quoting: overnight no-resting-orders window is active; orders cancelled and positions flattened."
             return
         opportunities = await self._rank_opportunities()
         tradable = [opp for opp in opportunities if opp.tradable]
         logger.info("evaluating {} opportunities; {} tradable", len(opportunities), len(tradable))
+        if not opportunities:
+            self.last_cycle_summary = self._format_no_market_summary()
+            return
+        if not tradable:
+            top_reasons = "; ".join(opportunities[0].reasons[:3]) if opportunities and opportunities[0].reasons else "unknown filters"
+            self.last_cycle_summary = f"Scanned {len(opportunities)} reward markets but 0 were tradable. Top skip reason: {top_reasons}"
+            return
         selected = tradable[: max(1, self.cfg.capital.max_concurrent_markets)]
         if self.cfg.capital.small_bankroll_mode and self.cfg.optimization.auto_trade_top_market:
             selected = selected[:1]
@@ -114,6 +123,13 @@ class LpBot:
                 self.learning.record("orders_attempted", market.condition_id, count=len(reports), estimated_reward=expected)
                 self.pnl.record("expected_reward", expected, market.condition_id, opportunity_score=opportunity.opportunity_score)
             await self.telegram.notify_reports(reports)
+            if reports:
+                self.last_cycle_summary = f"Placed/simulated {len(reports)} orders on {market.question[:80]}"
+            else:
+                self.last_cycle_summary = (
+                    f"Selected {market.question[:80]} but strategy produced 0 orders. "
+                    "Check min size, boundary, competition, and yield gates."
+                )
 
     async def flatten_positions(self, reason: str) -> str:
         await self.executor.cancel_stale_orders(None)
@@ -137,6 +153,17 @@ class LpBot:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("opportunity analysis failed for {}: {}", market.condition_id, exc)
         return self.opportunities.rank(opportunities)
+
+    def _format_no_market_summary(self) -> str:
+        stats = self.fetcher.last_discovery_stats or {}
+        if not stats:
+            return "No reward markets loaded. Discovery did not return stats; check API/network logs."
+        rejected = stats.get("rejected", {})
+        reason_text = ", ".join(f"{k}={v}" for k, v in rejected.items()) or "none"
+        return (
+            f"No markets passed discovery filters. source={stats.get('source')} raw={stats.get('raw')} "
+            f"parsed={stats.get('parsed')} passed={stats.get('passed')} rejected: {reason_text}"
+        )
 
     async def _load_markets(self) -> list[Market]:
         markets: list[Market] = []
@@ -190,7 +217,7 @@ class LpBot:
 
     async def telegram_run_once(self) -> str:
         await self.run_once()
-        return "Completed one scan/quote cycle."
+        return self.last_cycle_summary
 
     async def telegram_search(self) -> str:
         return await self.telegram_top()
@@ -198,7 +225,7 @@ class LpBot:
     async def telegram_top(self) -> str:
         opportunities = await self._rank_opportunities()
         if not opportunities:
-            return "No reward opportunities found."
+            return self._format_no_market_summary()
         lines = ["<b>Top bankroll-aware opportunities</b>"]
         for opp in opportunities[:10]:
             status = "✅" if opp.tradable else "⛔"
