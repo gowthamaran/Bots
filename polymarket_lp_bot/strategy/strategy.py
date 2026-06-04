@@ -9,11 +9,19 @@ execution supervisor immediately tries to sell/flatten positions.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-from loguru import logger
+try:
+    from loguru import logger
+except ModuleNotFoundError:  # pragma: no cover
+    import logging
+    logger = logging.getLogger(__name__)
 
 from polymarket_lp_bot.config import MarketFilters, StrategyConfig, TradingPolicyConfig
-from polymarket_lp_bot.data.data_fetcher import MarketSnapshot
+if TYPE_CHECKING:
+    from polymarket_lp_bot.data.data_fetcher import MarketSnapshot
+else:
+    MarketSnapshot = Any
 from polymarket_lp_bot.learning import LearningStore
 from polymarket_lp_bot.risk import RiskManager
 from polymarket_lp_bot.scoring import (
@@ -67,11 +75,20 @@ class LiquidityRewardsStrategy:
         self.policy = policy or TradingPolicyConfig()
         self.learning = learning
 
-    def build_intents(self, snapshot: MarketSnapshot, competitor_orders: list[RewardOrder] | None = None) -> list[OrderIntent]:
+    def build_intents(
+        self,
+        snapshot: MarketSnapshot,
+        competitor_orders: list[RewardOrder] | None = None,
+        target_spread_cents: float | None = None,
+        max_deployable_capital_usdc: float | None = None,
+    ) -> list[OrderIntent]:
         market = snapshot.market
         midpoint = snapshot.midpoint
         if midpoint is None:
             logger.info("{} skipped: no midpoint", market.condition_id)
+            return []
+        if midpoint < self.filters.hard_stop_min_midpoint or midpoint > self.filters.hard_stop_max_midpoint:
+            logger.info("{} skipped: midpoint {} outside hard stop band", market.condition_id, midpoint)
             return []
         if not self.risk.trading_window_open():
             logger.info("{} skipped: overnight no-resting-orders window is active", market.condition_id)
@@ -97,7 +114,7 @@ class LiquidityRewardsStrategy:
             logger.info("{} skipped: too many qualifying competitor levels", market.condition_id)
             return []
 
-        half_spread = self.config.target_spread_cents / 100.0
+        half_spread = (target_spread_cents if target_spread_cents is not None else self.config.target_spread_cents) / 100.0
         bid_price = round(max(0.01, midpoint - half_spread), 2)
         ask_price = round(min(0.99, midpoint + half_spread), 2)
         if abs(bid_price - midpoint) > market.max_incentive_spread or abs(ask_price - midpoint) > market.max_incentive_spread:
@@ -110,6 +127,8 @@ class LiquidityRewardsStrategy:
             logger.info("{} skipped: missing min incentive size", market.condition_id)
             return []
         max_budget = min(self.config.max_order_size_usdc, self.risk.config.max_market_capital_usdc / 2)
+        if max_deployable_capital_usdc is not None:
+            max_budget = min(max_budget, max_deployable_capital_usdc / 2)
         size = max(market.min_incentive_size, max_budget / max(bid_price, ask_price, 0.01))
         notional = size * max(bid_price, 1.0 - ask_price)
         if not self.risk.capital_allowed(market.condition_id, notional * 2):

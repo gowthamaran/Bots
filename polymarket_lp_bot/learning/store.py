@@ -31,6 +31,8 @@ class MarketMemory:
     orders_filled: int = 0
     exits_attempted: int = 0
     exit_failures: int = 0
+    toxic_fills: int = 0
+    total_fills_with_outcome: int = 0
     cumulative_estimated_reward: float = 0.0
     recent_competition_q: deque[float] = field(default_factory=lambda: deque(maxlen=100))
     recent_yield_pct: deque[float] = field(default_factory=lambda: deque(maxlen=100))
@@ -46,6 +48,10 @@ class MarketMemory:
     @property
     def avg_competition_q(self) -> float:
         return sum(self.recent_competition_q) / len(self.recent_competition_q) if self.recent_competition_q else 0.0
+
+    @property
+    def fill_toxicity_rate(self) -> float:
+        return self.toxic_fills / self.total_fills_with_outcome if self.total_fills_with_outcome else 0.0
 
     @property
     def avg_yield_pct(self) -> float:
@@ -84,6 +90,8 @@ class LearningStore:
             penalty += min(1.0, memory.exit_failure_rate * 5.0)
         if memory.avg_competition_q > 0:
             penalty += min(0.5, memory.avg_competition_q / 10_000.0)
+        if memory.fill_toxicity_rate > 0.10:
+            penalty += min(2.0, memory.fill_toxicity_rate * 4.0)
         return penalty
 
     def summary(self) -> dict[str, Any]:
@@ -96,6 +104,7 @@ class LearningStore:
                 "exit_failure_rate": mem.exit_failure_rate,
                 "avg_competition_q": mem.avg_competition_q,
                 "avg_yield_pct": mem.avg_yield_pct,
+                "fill_toxicity_rate": mem.fill_toxicity_rate,
             }
             for market_id, mem in self.markets.items()
         }
@@ -132,3 +141,7 @@ class LearningStore:
             mem.exits_attempted += int(event.payload.get("count", 1))
             if event.payload.get("failed"):
                 mem.exit_failures += 1
+        elif event.event_type == "fill_outcome":
+            mem.total_fills_with_outcome += 1
+            if event.payload.get("toxic"):
+                mem.toxic_fills += 1

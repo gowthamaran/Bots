@@ -11,7 +11,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from loguru import logger
+try:
+    from loguru import logger
+except ModuleNotFoundError:  # pragma: no cover
+    import logging
+    logger = logging.getLogger(__name__)
 
 from polymarket_lp_bot.config import ApiConfig, BotConfig
 from polymarket_lp_bot.scoring import Side

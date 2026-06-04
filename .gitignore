@@ -7,3 +7,5 @@ config/config.yaml
 *.log
 
 data/learning_events.jsonl
+
+data/pnl_events.jsonl

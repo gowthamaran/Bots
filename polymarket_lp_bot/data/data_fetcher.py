@@ -7,7 +7,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from loguru import logger
+try:
+    from loguru import logger
+except ModuleNotFoundError:  # pragma: no cover
+    import logging
+    logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -199,6 +203,8 @@ class PolymarketDataFetcher:
             return False
         q = market.question.lower()
         if any(keyword.lower() in q for keyword in filters.blocked_keywords):
+            return False
+        if any(keyword.lower() in q for keyword in filters.avoid_keywords):
             return False
         if filters.allowed_topics and (market.category or "").lower() not in {x.lower() for x in filters.allowed_topics}:
             return False

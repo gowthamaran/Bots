@@ -7,21 +7,26 @@ import asyncio
 import signal
 from contextlib import suppress
 
-from loguru import logger
+try:
+    from loguru import logger
+except ModuleNotFoundError:  # pragma: no cover
+    import logging
+    logger = logging.getLogger(__name__)
 
 from polymarket_lp_bot.config import load_config
 from polymarket_lp_bot.data.data_fetcher import Market, PolymarketDataFetcher
 from polymarket_lp_bot.execution import build_executor
 from polymarket_lp_bot.learning import LearningStore
-from polymarket_lp_bot.monitoring import TelegramNotifier
+from polymarket_lp_bot.monitoring import PnlTracker, TelegramNotifier
 from polymarket_lp_bot.risk import CircuitBreaker, RiskManager
-from polymarket_lp_bot.strategy import LiquidityRewardsStrategy
+from polymarket_lp_bot.strategy import LiquidityRewardsStrategy, Opportunity, OpportunityAnalyzer
 
 
 class LpBot:
     def __init__(self, config_path: str):
         self.cfg = load_config(config_path)
         self.learning = LearningStore(self.cfg.learning.path, enabled=self.cfg.learning.enabled)
+        self.pnl = PnlTracker(self.cfg.pnl.path)
         self.fetcher = PolymarketDataFetcher(self.cfg.api)
         self.risk = RiskManager(self.cfg.risk, self.cfg.policy)
         self.strategy = LiquidityRewardsStrategy(
@@ -30,6 +35,14 @@ class LpBot:
             filters=self.cfg.filters,
             policy=self.cfg.policy,
             learning=self.learning,
+        )
+        self.opportunities = OpportunityAnalyzer(
+            self.cfg.capital,
+            self.cfg.rewards,
+            self.cfg.filters,
+            self.cfg.policy,
+            self.cfg.optimization,
+            self.learning,
         )
         self.executor = build_executor(self.cfg)
         self.telegram = TelegramNotifier(self.cfg.telegram)
@@ -75,23 +88,31 @@ class LpBot:
             await self.executor.cancel_stale_orders(None)
             await self.flatten_positions("overnight_window")
             return
-        markets = await self._load_markets()
-        logger.info("evaluating {} markets", len(markets))
+        opportunities = await self._rank_opportunities()
+        tradable = [opp for opp in opportunities if opp.tradable]
+        logger.info("evaluating {} opportunities; {} tradable", len(opportunities), len(tradable))
+        selected = tradable[: max(1, self.cfg.capital.max_concurrent_markets)]
+        if self.cfg.capital.small_bankroll_mode and self.cfg.optimization.auto_trade_top_market:
+            selected = selected[:1]
 
-        for market in markets:
+        for opportunity in selected:
+            market = next(m for m in await self._load_markets() if m.condition_id == opportunity.condition_id)
             snapshot = await self.fetcher.fetch_snapshot(market)
+            competitor_orders = self.strategy.competitor_orders_from_books(snapshot)
             if self.cfg.strategy.cancel_stale_orders:
                 await self.executor.cancel_stale_orders(market.condition_id)
             await self.executor.reconcile_market(market.condition_id)
-            intents = self.strategy.build_intents(snapshot)
+            intents = self.strategy.build_intents(
+                snapshot,
+                competitor_orders,
+                target_spread_cents=opportunity.recommended_spread_cents,
+                max_deployable_capital_usdc=opportunity.deployable_capital_usdc,
+            )
             reports = await self.executor.place_orders(intents)
             if reports:
-                self.learning.record(
-                    "orders_attempted",
-                    market.condition_id,
-                    count=len(reports),
-                    estimated_reward=sum((r.intent.estimated_daily_reward for r in reports if r.intent), 0.0),
-                )
+                expected = sum((r.intent.estimated_daily_reward for r in reports if r.intent), 0.0)
+                self.learning.record("orders_attempted", market.condition_id, count=len(reports), estimated_reward=expected)
+                self.pnl.record("expected_reward", expected, market.condition_id, opportunity_score=opportunity.opportunity_score)
             await self.telegram.notify_reports(reports)
 
     async def flatten_positions(self, reason: str) -> str:
@@ -99,9 +120,23 @@ class LpBot:
         positions = await self.executor.get_positions()
         reports = await self.executor.sell_positions_immediately(positions, self.cfg.policy.marketable_exit_edge_cents)
         for pos, report in zip(positions, reports, strict=False):
-            self.learning.record("exit_attempted", pos.condition_id, failed="error" in report.status)
+            failed = "error" in report.status
+            self.learning.record("exit_attempted", pos.condition_id, failed=failed)
+            self.pnl.record("exit_slippage", 0.0, pos.condition_id, failed=failed, token_id=pos.token_id, size=pos.size)
         await self.telegram.notify_reports(reports)
         return f"Flatten requested ({reason}). Cancelled resting orders and sent {len(reports)} exit orders."
+
+    async def _rank_opportunities(self) -> list[Opportunity]:
+        markets = await self._load_markets()
+        opportunities: list[Opportunity] = []
+        for market in markets:
+            try:
+                snapshot = await self.fetcher.fetch_snapshot(market)
+                competitor_orders = self.strategy.competitor_orders_from_books(snapshot)
+                opportunities.append(self.opportunities.analyze(snapshot, competitor_orders))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("opportunity analysis failed for {}: {}", market.condition_id, exc)
+        return self.opportunities.rank(opportunities)
 
     async def _load_markets(self) -> list[Market]:
         markets: list[Market] = []
@@ -121,6 +156,8 @@ class LpBot:
                 if not self.risk.trading_window_open() and open_orders:
                     await self.executor.cancel_stale_orders(None)
                 if self.cfg.policy.flatten_positions_immediately and positions:
+                    for pos in positions:
+                        self.learning.record("orders_filled", pos.condition_id, count=1, token_id=pos.token_id, size=pos.size)
                     await self.flatten_positions("position_supervisor")
                 self.learning.record("supervisor_parse", None, open_orders=len(open_orders), positions=len(positions))
             except Exception as exc:  # noqa: BLE001
@@ -138,7 +175,8 @@ class LpBot:
             f"trading_window_open={self.risk.trading_window_open()}\n"
             f"never_leave_orders_overnight={self.cfg.policy.never_leave_orders_overnight}\n"
             f"flatten_positions_immediately={self.cfg.policy.flatten_positions_immediately}\n"
-            f"min_days_to_resolution={self.cfg.filters.min_days_to_resolution}"
+            f"min_days_to_resolution={self.cfg.filters.min_days_to_resolution}\n"
+            f"deployable_capital=${self.cfg.capital.deployable_capital_usdc:.2f}"
         )
 
     async def telegram_pause(self) -> str:
@@ -155,12 +193,23 @@ class LpBot:
         return "Completed one scan/quote cycle."
 
     async def telegram_search(self) -> str:
-        markets = await self._load_markets()
-        if not markets:
-            return "No markets passed filters."
-        lines = ["<b>Markets passing filters</b>"]
-        for market in markets[:15]:
-            lines.append(f"• {market.question[:80]} | rewards=${market.rewards_daily_rate:.0f}/day | liq=${market.liquidity:.0f}")
+        return await self.telegram_top()
+
+    async def telegram_top(self) -> str:
+        opportunities = await self._rank_opportunities()
+        if not opportunities:
+            return "No reward opportunities found."
+        lines = ["<b>Top bankroll-aware opportunities</b>"]
+        for opp in opportunities[:10]:
+            status = "✅" if opp.tradable else "⛔"
+            reason = "; ".join(opp.reasons[:2]) if opp.reasons else "tradable"
+            lines.append(
+                f"{status} {opp.question[:70]}\n"
+                f"  mid={opp.midpoint:.2f} spread={opp.recommended_spread_cents:.1f}c "
+                f"need=${opp.required_capital_usdc:.2f} reward=${opp.estimated_daily_reward:.2f}/d "
+                f"yield={opp.estimated_daily_yield_pct:.1f}% score={opp.opportunity_score:.2f}\n"
+                f"  {reason}"
+            )
         return "\n".join(lines)
 
     async def telegram_orders(self) -> str:
@@ -168,6 +217,18 @@ class LpBot:
         positions = await self.executor.get_positions()
         await self.telegram.notify_orders_positions(orders, positions)
         return f"Parsed {len(orders)} open orders and {len(positions)} positions."
+
+    async def telegram_pnl(self) -> str:
+        summary = self.pnl.summarize()
+        return (
+            "<b>Today PnL</b>\n"
+            f"Expected rewards: ${summary.expected_rewards:.2f}\n"
+            f"Realized rewards: ${summary.realized_rewards:.2f}\n"
+            f"Trading PnL: ${summary.realized_trading_pnl:.2f}\n"
+            f"Exit slippage: ${summary.exit_slippage:.2f}\n"
+            f"Net: ${summary.net_profit:.2f}\n"
+            f"Events: {summary.events}"
+        )
 
     async def telegram_sellall(self) -> str:
         return await self.flatten_positions("telegram_sellall")
@@ -180,7 +241,8 @@ class LpBot:
         for market_id, stats in list(summary.items())[:10]:
             lines.append(
                 f"• {market_id}: cycles={stats['cycles_seen']} fill={stats['fill_rate']:.2%} "
-                f"exit_fail={stats['exit_failure_rate']:.2%} comp_q={stats['avg_competition_q']:.1f}"
+                f"exit_fail={stats['exit_failure_rate']:.2%} toxicity={stats.get('fill_toxicity_rate', 0):.2%} "
+                f"comp_q={stats['avg_competition_q']:.1f}"
             )
         return "\n".join(lines)
 

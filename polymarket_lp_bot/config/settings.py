@@ -67,6 +67,10 @@ class ApiConfig(BaseModel):
 class MarketFilters(BaseModel):
     min_midpoint: float = 0.10
     max_midpoint: float = 0.90
+    preferred_min_midpoint: float = 0.25
+    preferred_max_midpoint: float = 0.75
+    hard_stop_min_midpoint: float = 0.15
+    hard_stop_max_midpoint: float = 0.85
     min_days_to_resolution: float = 7.0
     min_daily_rewards_usdc: float = 10.0
     min_liquidity_usdc: float = 1_000.0
@@ -75,6 +79,7 @@ class MarketFilters(BaseModel):
     max_hours_to_resolution: float = 24 * 60.0
     allowed_topics: list[str] = Field(default_factory=list)
     blocked_keywords: list[str] = Field(default_factory=lambda: ["lawsuit", "court", "delist"])
+    avoid_keywords: list[str] = Field(default_factory=lambda: ["tweet", "mention", "say", "war", "invasion", "attack", "ceasefire", "lawsuit", "court", "bankruptcy", "celebrity"])
     allow_sports: bool = False
 
 
@@ -88,6 +93,40 @@ class StrategyConfig(BaseModel):
     auto_discover: bool = True
     boundary_buffer_cents: float = 1.0
     cancel_stale_orders: bool = True
+
+
+class CapitalConfig(BaseModel):
+    starting_bankroll_usdc: float = 20.0
+    reserve_usdc: float = 3.0
+    max_active_capital_pct: float = 70.0
+    max_concurrent_markets: int = 1
+    small_bankroll_mode: bool = True
+
+    @property
+    def deployable_capital_usdc(self) -> float:
+        gross = max(0.0, self.starting_bankroll_usdc - self.reserve_usdc)
+        return gross * max(0.0, min(self.max_active_capital_pct, 100.0)) / 100.0
+
+
+class RewardsConfig(BaseModel):
+    min_projected_payout_usdc: float = 1.30
+    min_expected_daily_yield_pct: float = 6.5
+    payout_safety_buffer: float = 1.30
+    sample_minutes_per_day: int = 1_440
+
+
+class OptimizationConfig(BaseModel):
+    enabled: bool = True
+    candidate_spreads_cents: list[float] = Field(default_factory=lambda: [0.5, 1.0, 1.5])
+    quote_refresh_seconds: int = 15
+    max_q_imbalance_ratio: float = 1.5
+    auto_trade_top_market: bool = True
+    backtest_enabled: bool = False
+
+
+class PnlConfig(BaseModel):
+    path: str = "data/pnl_events.jsonl"
+    reward_reconciliation_minutes_after_midnight: int = 5
 
 
 class RiskConfig(BaseModel):
@@ -139,6 +178,10 @@ class BotConfig(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     policy: TradingPolicyConfig = Field(default_factory=TradingPolicyConfig)
     learning: LearningConfig = Field(default_factory=LearningConfig)
+    capital: CapitalConfig = Field(default_factory=CapitalConfig)
+    rewards: RewardsConfig = Field(default_factory=RewardsConfig)
+    optimization: OptimizationConfig = Field(default_factory=OptimizationConfig)
+    pnl: PnlConfig = Field(default_factory=PnlConfig)
     secrets: Secrets = Field(default_factory=Secrets)
 
     @field_validator("strategy")

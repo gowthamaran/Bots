@@ -166,3 +166,41 @@ min incentive size filtering, and the 10c/90c Q_min boundary.
 - Multi-market optimizer that allocates capital by marginal Q_min per USDC.
 - Historical storage and a dashboard comparing expected vs. paid rewards.
 - Backtesting harness and news/event risk filter integrations.
+
+## Phase 1/2/3 features now scaffolded
+
+### Phase 1: $20 small-bankroll auto-discovery
+
+The bot includes a bankroll-aware opportunity analyzer that ranks markets by affordability,
+projected reward, estimated daily yield, competition, topic safety, and preferred price band. Use
+Telegram `/top` to see why each market is tradable or skipped. The default config is tuned for a
+$20 bankroll with a $3 reserve and one active market at a time.
+
+Key gates:
+
+- minimum-size affordability before quoting;
+- projected payout floor (`min_projected_payout_usdc`, default `$1.30`);
+- one-best-market concentration;
+- dynamic spread candidates (`0.5c`, `1.0c`, `1.5c`);
+- `/pnl` for expected rewards versus trading PnL events.
+
+### Phase 2: Profit protection
+
+The strategy adds stricter hard-stop and preferred price bands, topic-risk keyword avoidance, low
+competition caps, immediate flattening, and learning penalties for exit failures and toxic fills.
+The supervisor continuously parses orders and positions, cancels stale/overnight orders, and sends
+sell exits for detected inventory.
+
+### Phase 3: Optimization and operations
+
+The repository now includes extension points for dynamic spread optimization, 24h reward simulation,
+JSONL PnL/reward reconciliation, and a backtesting harness stub. These are intentionally transparent
+and file-backed so the bot remains deployable without standing up a database first.
+
+## Deploy checklist
+
+1. Keep `strategy.mode: "paper"` until `/top`, `/orders`, `/pnl`, and logs look sane.
+2. Set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in the environment.
+3. For live mode only, set `POLYMARKET_PRIVATE_KEY` and any required funder/signature env vars.
+4. Start with the example $20 limits; do not increase capital until expected and realized PnL match.
+5. Run under Docker or a process manager and watch Telegram for circuit-breaker/exit alerts.

@@ -8,7 +8,11 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from loguru import logger
+try:
+    from loguru import logger
+except ModuleNotFoundError:  # pragma: no cover
+    import logging
+    logger = logging.getLogger(__name__)
 
 from polymarket_lp_bot.config import TelegramConfig
 from polymarket_lp_bot.execution import ExecutionReport, OpenOrder, Position
@@ -42,7 +46,9 @@ class TelegramNotifier:
             "resume": self._cmd_resume,
             "run_once": self._cmd_run_once,
             "search": self._cmd_search,
+            "top": self._cmd_top,
             "orders": self._cmd_orders,
+            "pnl": self._cmd_pnl,
             "sellall": self._cmd_sellall,
             "learning": self._cmd_learning,
         }.items():
@@ -106,8 +112,10 @@ class TelegramNotifier:
             "<b>Commands</b>\n"
             "/status - bot mode, pause state, policy\n"
             "/search - discover low-competition reward markets\n"
+            "/top - rank bankroll-aware opportunities\n"
             "/run_once - execute one scan/quote cycle\n"
             "/orders - parse current open orders and positions\n"
+            "/pnl - expected rewards vs trading PnL\n"
             "/sellall - cancel orders and immediately sell/flatten positions\n"
             "/pause - stop placing new orders\n"
             "/resume - allow new orders\n"
@@ -129,8 +137,14 @@ class TelegramNotifier:
     async def _cmd_search(self, update: Any, context: Any) -> None:
         await self._guard(update, self._controller.telegram_search)
 
+    async def _cmd_top(self, update: Any, context: Any) -> None:
+        await self._guard(update, self._controller.telegram_top)
+
     async def _cmd_orders(self, update: Any, context: Any) -> None:
         await self._guard(update, self._controller.telegram_orders)
+
+    async def _cmd_pnl(self, update: Any, context: Any) -> None:
+        await self._guard(update, self._controller.telegram_pnl)
 
     async def _cmd_sellall(self, update: Any, context: Any) -> None:
         await self._guard(update, self._controller.telegram_sellall)
